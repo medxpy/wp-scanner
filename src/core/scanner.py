@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+import signal
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urljoin
@@ -45,6 +46,10 @@ class VulnScanner:
         self.session.verify = False
         self.findings = []
         self.plugin_checker = PluginChecker()
+        self.should_stop = False
+        
+        # Set up signal handler
+        signal.signal(signal.SIGINT, self.handle_interrupt)
         
         # Initialize all CVE modules
         self.cve_modules = {
@@ -71,8 +76,20 @@ class VulnScanner:
             'CVE-2021-4455': 'smart-product-review'
         }
 
+    def handle_interrupt(self, signum, frame):
+        """Handle keyboard interrupt gracefully"""
+        if not self.should_stop:
+            self.should_stop = True
+            print(f"\n{Fore.YELLOW}[!] Stopping scan gracefully... Please wait for current operations to complete.{Style.RESET_ALL}")
+        else:
+            print(f"\n{Fore.RED}[!] Force stopping scan...{Style.RESET_ALL}")
+            sys.exit(1)
+
     def scan_cve(self, url, cve_name, module):
         """Scan a single CVE against a URL"""
+        if self.should_stop:
+            return False, cve_name
+            
         try:
             payload = module.get_payload()
             full_url = urljoin(url, payload['path'])
@@ -124,16 +141,23 @@ class VulnScanner:
             return False, cve_name
             
         except Exception:
-            return False, cve_name
+            if not self.should_stop:  # Only print error if not stopping
+                return False, cve_name
 
     def scan_site(self, url):
         """Scan a single site for all CVEs in parallel"""
+        if self.should_stop:
+            return
+            
         url = ensure_https(url)
         print(f"\n{Fore.CYAN}[*] Scanning {url}{Style.RESET_ALL}")
         
         # Check plugins first
         vulnerable_plugins = set()
         for cve_name, plugin_slug in self.cve_to_plugin.items():
+            if self.should_stop:
+                return
+                
             exists, version, is_vulnerable = self.plugin_checker.check_plugin(self.session, url, plugin_slug)
             
             if not exists:
@@ -153,6 +177,9 @@ class VulnScanner:
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = []
             for cve_name, module in self.cve_modules.items():
+                if self.should_stop:
+                    break
+                    
                 # Skip if CVE is plugin-specific and plugin is not vulnerable
                 if cve_name in self.cve_to_plugin and cve_name not in vulnerable_plugins:
                     continue
@@ -160,6 +187,9 @@ class VulnScanner:
                 futures.append(executor.submit(self.scan_cve, url, cve_name, module))
             
             for future in futures:
+                if self.should_stop:
+                    break
+                    
                 is_vulnerable, cve_name = future.result()
                 if is_vulnerable:
                     print(f"{Fore.GREEN}[+] {url} - Vulnerable to {cve_name}{Style.RESET_ALL}")
@@ -168,6 +198,9 @@ class VulnScanner:
 
     def save_findings(self):
         """Save findings to JSONL file"""
+        if not self.findings:
+            return
+            
         reports_dir = ensure_reports_dir()
         report_file = reports_dir / 'findings.jsonl'
         
@@ -191,12 +224,18 @@ def main():
             urls = [line.strip() for line in f if line.strip()]
 
         print(f"\n{Fore.CYAN}[*] Starting scan for {len(urls)} URLs...{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}[!] Press Ctrl+C to stop the scan gracefully{Style.RESET_ALL}")
         
         for url in urls:
+            if scanner.should_stop:
+                break
             scanner.scan_site(url)
 
         scanner.save_findings()
-        print(f"\n{Fore.GREEN}[+] Scan completed! Results saved in reports/findings.jsonl{Style.RESET_ALL}")
+        if scanner.should_stop:
+            print(f"\n{Fore.YELLOW}[!] Scan stopped by user. Partial results saved in reports/findings.jsonl{Style.RESET_ALL}")
+        else:
+            print(f"\n{Fore.GREEN}[+] Scan completed! Results saved in reports/findings.jsonl{Style.RESET_ALL}")
 
     except FileNotFoundError:
         print(f"{Fore.RED}[-] Error: File {args.file} not found{Style.RESET_ALL}")

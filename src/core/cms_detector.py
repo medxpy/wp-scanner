@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+import signal
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin
@@ -30,6 +31,10 @@ class CMSDetector:
         self.session = requests.Session()
         self.session.verify = False
         self.findings = []
+        self.should_stop = False
+        
+        # Set up signal handler
+        signal.signal(signal.SIGINT, self.handle_interrupt)
         
         # CMS signatures
         self.cms_signatures = {
@@ -72,8 +77,20 @@ class CMSDetector:
             }
         }
 
+    def handle_interrupt(self, signum, frame):
+        """Handle keyboard interrupt gracefully"""
+        if not self.should_stop:
+            self.should_stop = True
+            print(f"\n{Fore.YELLOW}[!] Stopping scan gracefully... Please wait for current operations to complete.{Style.RESET_ALL}")
+        else:
+            print(f"\n{Fore.RED}[!] Force stopping scan...{Style.RESET_ALL}")
+            sys.exit(1)
+
     def detect_cms(self, url):
         """Detect CMS and version for a single URL"""
+        if self.should_stop:
+            return
+
         url = ensure_https(url)
         print(f"\n{Fore.CYAN}[*] Analyzing {url}{Style.RESET_ALL}")
         
@@ -93,6 +110,9 @@ class CMSDetector:
                 # Check meta tags
                 meta_tags = soup.find_all('meta')
                 for tag in meta_tags:
+                    if self.should_stop:
+                        return
+                        
                     content = str(tag.get('content', '')).lower()
                     name = str(tag.get('name', '')).lower()
                     
@@ -104,6 +124,9 @@ class CMSDetector:
                 
                 # Check paths
                 for cms, info in self.cms_signatures.items():
+                    if self.should_stop:
+                        return
+                        
                     for path in info['paths']:
                         try:
                             test_url = urljoin(url, path)
@@ -120,6 +143,9 @@ class CMSDetector:
                 
                 # Try to get version
                 for cms in detected_cms:
+                    if self.should_stop:
+                        return
+                        
                     version = self.get_cms_version(url, cms, soup)
                     if version:
                         print(f"{Fore.GREEN}[+] {url} - Detected {self.cms_signatures[cms]['name']} version {version}{Style.RESET_ALL}")
@@ -139,10 +165,14 @@ class CMSDetector:
                 print(f"{Fore.YELLOW}[-] {url} - No CMS detected{Style.RESET_ALL}")
             
         except Exception as e:
-            print(f"{Fore.RED}[-] {url} - Error: {str(e)}{Style.RESET_ALL}")
+            if not self.should_stop:  # Only print error if not stopping
+                print(f"{Fore.RED}[-] {url} - Error: {str(e)}{Style.RESET_ALL}")
 
     def get_cms_version(self, url, cms, soup):
         """Get CMS version from various sources"""
+        if self.should_stop:
+            return None
+            
         try:
             if cms == 'wordpress':
                 # Try meta generator tag
@@ -184,6 +214,9 @@ class CMSDetector:
 
     def save_findings(self):
         """Save findings to JSONL file"""
+        if not self.findings:
+            return
+            
         reports_dir = ensure_reports_dir()
         report_file = reports_dir / 'cms_findings.jsonl'
         
@@ -207,12 +240,18 @@ def main():
             urls = [line.strip() for line in f if line.strip()]
 
         print(f"\n{Fore.CYAN}[*] Starting CMS detection for {len(urls)} URLs...{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}[!] Press Ctrl+C to stop the scan gracefully{Style.RESET_ALL}")
         
         for url in urls:
+            if detector.should_stop:
+                break
             detector.detect_cms(url)
 
         detector.save_findings()
-        print(f"\n{Fore.GREEN}[+] Detection completed! Results saved in reports/cms_findings.jsonl{Style.RESET_ALL}")
+        if detector.should_stop:
+            print(f"\n{Fore.YELLOW}[!] Scan stopped by user. Partial results saved in reports/cms_findings.jsonl{Style.RESET_ALL}")
+        else:
+            print(f"\n{Fore.GREEN}[+] Detection completed! Results saved in reports/cms_findings.jsonl{Style.RESET_ALL}")
 
     except FileNotFoundError:
         print(f"{Fore.RED}[-] Error: File {args.file} not found{Style.RESET_ALL}")
