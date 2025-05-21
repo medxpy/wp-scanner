@@ -3,4 +3,4 @@ colorama==0.4.6
 tqdm==4.66.1
 urllib3==2.0.7
 packaging==23.2
-beautifulsoup4==4.12.2 
+wappalyzer==0.3.4

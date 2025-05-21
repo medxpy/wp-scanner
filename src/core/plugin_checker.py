@@ -4,7 +4,9 @@ Handles detection and version checking of WordPress plugins
 """
 
 import re
+import logging
 from packaging import version
+from src.utils.helpers import ensure_https
 
 class PluginChecker:
     def __init__(self):
@@ -56,42 +58,39 @@ class PluginChecker:
     def get_plugin_version(self, session, url, plugin_slug):
         """Get plugin version from readme.txt or PHP file"""
         plugin_info = self.vulnerable_plugins[plugin_slug]
-        
+        url = ensure_https(url)
         # Try readme.txt first
         readme_url = url + plugin_info['readme_path']
         try:
             response = session.get(readme_url, timeout=10)
             if response.status_code == 200:
-                # Look for Stable tag
                 stable_match = re.search(r'Stable tag:\s*([\d\.]+)', response.text)
                 if stable_match:
                     return stable_match.group(1)
-        except:
-            pass
-
+        except requests.RequestException as e:
+            logging.error(f"Request error fetching {readme_url}: {e}")
+        except Exception as e:
+            logging.error(f"Unexpected error fetching {readme_url}: {e}")
         # Try PHP file if readme.txt fails
         php_url = url + plugin_info['php_path']
         try:
             response = session.get(php_url, timeout=10)
             if response.status_code == 200:
-                # Look for Version in PHP header
                 version_match = re.search(r'Version:\s*([\d\.]+)', response.text)
                 if version_match:
                     return version_match.group(1)
-        except:
-            pass
-
+        except requests.RequestException as e:
+            logging.error(f"Request error fetching {php_url}: {e}")
+        except Exception as e:
+            logging.error(f"Unexpected error fetching {php_url}: {e}")
         return None
 
     def is_plugin_vulnerable(self, plugin_slug, version_str):
         """Check if plugin version is vulnerable"""
         if not version_str:
             return False
-
         plugin_info = self.vulnerable_plugins[plugin_slug]
         vulnerable_versions = plugin_info['vulnerable_versions']
-        
-        # Parse version string
         try:
             current_version = version.parse(version_str)
             if vulnerable_versions.startswith('<='):
@@ -100,28 +99,27 @@ class PluginChecker:
             elif vulnerable_versions.startswith('<'):
                 max_version = version.parse(vulnerable_versions[1:])
                 return current_version < max_version
-        except:
+        except Exception as e:
+            logging.error(f"Error parsing version for {plugin_slug}: {e}")
             return False
-
         return False
 
     def check_plugin(self, session, url, plugin_slug):
         """Check if plugin is present and vulnerable"""
         plugin_info = self.vulnerable_plugins[plugin_slug]
-        
-        # Check if plugin exists
+        url = ensure_https(url)
         try:
             response = session.get(url + plugin_info['php_path'], timeout=10)
             if response.status_code != 200:
                 return False, None, None
-        except:
+        except requests.RequestException as e:
+            logging.error(f"Request error checking plugin {plugin_slug} on {url}: {e}")
             return False, None, None
-
-        # Get version
+        except Exception as e:
+            logging.error(f"Unexpected error checking plugin {plugin_slug} on {url}: {e}")
+            return False, None, None
         version_str = self.get_plugin_version(session, url, plugin_slug)
         if not version_str:
-            return True, None, None  # Plugin exists but version unknown
-
-        # Check if vulnerable
+            return True, None, None
         is_vulnerable = self.is_plugin_vulnerable(plugin_slug, version_str)
-        return True, version_str, is_vulnerable 
+        return True, version_str, is_vulnerable
