@@ -72,7 +72,7 @@ class TechDetector:
     def save_findings(self):
         if not self.findings:
             return
-        with open(self.output_path, 'w', encoding='utf-8') as f:
+        with open(self.output_path, 'a', encoding='utf-8') as f:
             for finding in self.findings:
                 f.write(json.dumps(finding) + '\n')
         logging.info(f"Results saved in {self.output_path}")
