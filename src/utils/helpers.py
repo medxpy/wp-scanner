@@ -27,7 +27,7 @@ def get_random_headers():
 def ensure_https(url):
     """Ensure URL starts with https://"""
     if not url.startswith(('http://', 'https://')):
-        return 'https://' + url
+        return 'http://' + url
     return url
 
 def get_timestamp():
